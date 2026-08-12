@@ -1,0 +1,4 @@
+source;share/qcar2_nodes/local_setup.bash
+source;share/qcar2_nodes/local_setup.dsv
+source;share/qcar2_nodes/local_setup.sh
+source;share/qcar2_nodes/local_setup.zsh

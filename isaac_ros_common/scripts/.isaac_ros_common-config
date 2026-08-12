@@ -1,2 +1,2 @@
 CONFIG_IMAGE_KEY="ros2_humble.ros_cartographer.user.quanser"
-CONFIG_DOCKER_SEARCH_DIRS=(/home/$USER/Documents/ACC_Development/docker/development_docker/quanser_dev_docker_files)
+CONFIG_DOCKER_SEARCH_DIRS=(/home/$USER/Documents/GitHub/QCar2Summer2026Research/docker/development_docker/quanser_dev_docker_files)

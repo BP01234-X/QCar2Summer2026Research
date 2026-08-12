@@ -1,0 +1,25 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from qcar2_interfaces/msg/MotorCommands.msg
+// generated code does not contain a copyright notice
+
+
+module qcar2_interfaces {
+  module msg {
+    @verbatim (language="comment", text=
+      " Driving command for QCar2 to directly control the Steering angle and Motor throttle" "\n"
+      "std_msgs/Header header")
+    struct MotorCommands {
+      @verbatim (language="comment", text=
+        "Names of whether to drive steering or throttle. Must be \"steering_angle\" or \"motor_throttle\"")
+      sequence<string> motor_names;
+
+      @verbatim (language="comment", text=
+        "Values for the \"command_names\"." "\n"
+        "The order must be identical to the \"command_names\"." "\n"
+        "Units are:" "\n"
+        "  \"rad\" for \"steering_angle\"" "\n"
+        "  \"m/s\" for \"motor_throttle\"")
+      sequence<double> values;
+    };
+  };
+};

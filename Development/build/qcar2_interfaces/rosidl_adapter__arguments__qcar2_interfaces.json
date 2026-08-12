@@ -1,0 +1,7 @@
+{
+  "package_name": "qcar2_interfaces",
+  "non_idl_tuples": [
+    "/workspaces/isaac_ros-dev/ros2/src/qcar2_interfaces:msg/MotorCommands.msg",
+    "/workspaces/isaac_ros-dev/ros2/src/qcar2_interfaces:msg/BooleanLeds.msg"
+  ]
+}

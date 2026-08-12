@@ -1,0 +1,26 @@
+For docker with qlabs and setup scenario:
+cd /home/$USER/Documents/ACC_Development/docker/virtual_qcar2
+sudo docker run --rm -it --network host --name virtual-qcar2 quanser/virtual-qcar2 bash
+
+Once in docker:
+cd /home/qcar2_scripts/python
+python3 Base_Scenarios_Python/Setup_Competition_Map.py && clear
+
+Ros container:
+cd /home/$USER/Documents/ACC_Development/isaac_ros_common
+./scripts/run_dev.sh  /home/$USER/Documents/ACC_Development/Development
+
+colcon buid:
+colcon build && . install/setup.bash && export ROS_DOMAIN_ID=7 && clear
+
+To start cartographer:
+clear && . install/setup.bash && export ROS_DOMAIN_ID=7 && clear && ros2 launch qcar2_nodes qcar2_cartographer_virtual_launch.py && clear
+
+Running autonomy planner:
+colcon build --packages-select qcar2_autonomy && . install/setup.bash && export ROS_DOMAIN_ID=7 && ros2 launch qcar2_autonomy autonomy_planner_launch.py && clear
+
+Run nav_to_pose
+colcon build --packages-select qcar2_autonomy && . install/setup.bash && export ROS_DOMAIN_ID=7 && ros2 run qcar2_autonomy path_follower && clear
+
+Run YOLO
+colcon build --packages-select qcar2_autonomy && . install/setup.bash && export ROS_DOMAIN_ID=7 && ros2 run qcar2_autonomy yolo_detector && clear

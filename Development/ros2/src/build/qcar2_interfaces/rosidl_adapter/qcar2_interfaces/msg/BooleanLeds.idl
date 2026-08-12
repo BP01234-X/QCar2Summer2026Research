@@ -1,0 +1,41 @@
+// generated from rosidl_adapter/resource/msg.idl.em
+// with input from qcar2_interfaces/msg/BooleanLeds.msg
+// generated code does not contain a copyright notice
+
+
+module qcar2_interfaces {
+  module msg {
+    @verbatim (language="comment", text=
+      " LED commands for QCar2" "\n"
+      "std_msgs/Header header")
+    struct BooleanLeds {
+      @verbatim (language="comment", text=
+        "Names of the LED." "\n"
+        "Must be the following:" "\n"
+        "   \"left_outside_brake_light\"" "\n"
+        "   \"left_inside_brake_light\"" "\n"
+        "   \"right_inside_brake_light\"" "\n"
+        "   \"right_outside_brake_light\"" "\n"
+        "   \"left_reverse_light\"" "\n"
+        "   \"right_reverse_light\"" "\n"
+        "   \"left_rear_signal\"" "\n"
+        "   \"right_rear_signal\"" "\n"
+        "   \"left_outside_headlight\"" "\n"
+        "   \"left_middle_headlight\"" "\n"
+        "   \"left_inside_headlight\"" "\n"
+        "   \"right_inside_headlight\"" "\n"
+        "   \"right_middle_headlight\"" "\n"
+        "   \"right_outside_headlight\"" "\n"
+        "   \"left_front_signal\"" "\n"
+        "   \"right_front_signal\"")
+      sequence<string> led_names;
+
+      @verbatim (language="comment", text=
+        "Values for the \"led_names\"." "\n"
+        "The order must be identical to the \"led_names\"." "\n"
+        "Units are:" "\n"
+        "  false or true")
+      sequence<boolean> values;
+    };
+  };
+};

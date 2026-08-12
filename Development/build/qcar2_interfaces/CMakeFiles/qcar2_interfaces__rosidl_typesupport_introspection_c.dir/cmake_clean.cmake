@@ -1,0 +1,17 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/qcar2_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/qcar2_interfaces/msg/detail/boolean_leds__type_support.c.o"
+  "CMakeFiles/qcar2_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/qcar2_interfaces/msg/detail/boolean_leds__type_support.c.o.d"
+  "CMakeFiles/qcar2_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/qcar2_interfaces/msg/detail/motor_commands__type_support.c.o"
+  "CMakeFiles/qcar2_interfaces__rosidl_typesupport_introspection_c.dir/rosidl_typesupport_introspection_c/qcar2_interfaces/msg/detail/motor_commands__type_support.c.o.d"
+  "libqcar2_interfaces__rosidl_typesupport_introspection_c.pdb"
+  "libqcar2_interfaces__rosidl_typesupport_introspection_c.so"
+  "rosidl_typesupport_introspection_c/qcar2_interfaces/msg/detail/boolean_leds__rosidl_typesupport_introspection_c.h"
+  "rosidl_typesupport_introspection_c/qcar2_interfaces/msg/detail/boolean_leds__type_support.c"
+  "rosidl_typesupport_introspection_c/qcar2_interfaces/msg/detail/motor_commands__rosidl_typesupport_introspection_c.h"
+  "rosidl_typesupport_introspection_c/qcar2_interfaces/msg/detail/motor_commands__type_support.c"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang C)
+  include(CMakeFiles/qcar2_interfaces__rosidl_typesupport_introspection_c.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

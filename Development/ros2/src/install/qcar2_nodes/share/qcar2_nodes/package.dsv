@@ -1,0 +1,11 @@
+source;share/qcar2_nodes/hook/cmake_prefix_path.ps1
+source;share/qcar2_nodes/hook/cmake_prefix_path.dsv
+source;share/qcar2_nodes/hook/cmake_prefix_path.sh
+source;share/qcar2_nodes/hook/pythonpath.ps1
+source;share/qcar2_nodes/hook/pythonpath.dsv
+source;share/qcar2_nodes/hook/pythonpath.sh
+source;share/qcar2_nodes/local_setup.bash
+source;share/qcar2_nodes/local_setup.dsv
+source;share/qcar2_nodes/local_setup.ps1
+source;share/qcar2_nodes/local_setup.sh
+source;share/qcar2_nodes/local_setup.zsh

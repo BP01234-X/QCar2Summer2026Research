@@ -94,6 +94,16 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  scripts/wheel_odom.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  scripts/imu_bias_corrector.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # Install nodes
 #install(TARGETS qcar2_driver_interface
 #  DESTINATION lib/${PROJECT_NAME})

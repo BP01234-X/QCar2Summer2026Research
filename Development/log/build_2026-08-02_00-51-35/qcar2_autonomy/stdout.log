@@ -1,0 +1,50 @@
+running egg_info
+creating ../../../build/qcar2_autonomy/qcar2_autonomy.egg-info
+writing ../../../build/qcar2_autonomy/qcar2_autonomy.egg-info/PKG-INFO
+writing dependency_links to ../../../build/qcar2_autonomy/qcar2_autonomy.egg-info/dependency_links.txt
+writing entry points to ../../../build/qcar2_autonomy/qcar2_autonomy.egg-info/entry_points.txt
+writing requirements to ../../../build/qcar2_autonomy/qcar2_autonomy.egg-info/requires.txt
+writing top-level names to ../../../build/qcar2_autonomy/qcar2_autonomy.egg-info/top_level.txt
+writing manifest file '../../../build/qcar2_autonomy/qcar2_autonomy.egg-info/SOURCES.txt'
+reading manifest file '../../../build/qcar2_autonomy/qcar2_autonomy.egg-info/SOURCES.txt'
+writing manifest file '../../../build/qcar2_autonomy/qcar2_autonomy.egg-info/SOURCES.txt'
+running build
+running build_py
+creating /workspaces/isaac_ros-dev/build/qcar2_autonomy/build
+creating /workspaces/isaac_ros-dev/build/qcar2_autonomy/build/lib
+creating /workspaces/isaac_ros-dev/build/qcar2_autonomy/build/lib/autonomy
+copying autonomy/__init__.py -> /workspaces/isaac_ros-dev/build/qcar2_autonomy/build/lib/autonomy
+copying autonomy/nav_to_pose.py -> /workspaces/isaac_ros-dev/build/qcar2_autonomy/build/lib/autonomy
+copying autonomy/yolo_detector.py -> /workspaces/isaac_ros-dev/build/qcar2_autonomy/build/lib/autonomy
+copying autonomy/trip_planner.py -> /workspaces/isaac_ros-dev/build/qcar2_autonomy/build/lib/autonomy
+copying autonomy/traffic_system_detector.py -> /workspaces/isaac_ros-dev/build/qcar2_autonomy/build/lib/autonomy
+running install
+running install_lib
+creating /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy
+copying /workspaces/isaac_ros-dev/build/qcar2_autonomy/build/lib/autonomy/__init__.py -> /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy
+copying /workspaces/isaac_ros-dev/build/qcar2_autonomy/build/lib/autonomy/nav_to_pose.py -> /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy
+copying /workspaces/isaac_ros-dev/build/qcar2_autonomy/build/lib/autonomy/yolo_detector.py -> /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy
+copying /workspaces/isaac_ros-dev/build/qcar2_autonomy/build/lib/autonomy/trip_planner.py -> /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy
+copying /workspaces/isaac_ros-dev/build/qcar2_autonomy/build/lib/autonomy/traffic_system_detector.py -> /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy
+byte-compiling /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/__init__.py to __init__.cpython-38.pyc
+byte-compiling /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/nav_to_pose.py to nav_to_pose.cpython-38.pyc
+byte-compiling /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/yolo_detector.py to yolo_detector.cpython-38.pyc
+byte-compiling /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/trip_planner.py to trip_planner.cpython-38.pyc
+byte-compiling /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/traffic_system_detector.py to traffic_system_detector.cpython-38.pyc
+running install_data
+creating /workspaces/isaac_ros-dev/install/qcar2_autonomy/share/ament_index
+creating /workspaces/isaac_ros-dev/install/qcar2_autonomy/share/ament_index/resource_index
+creating /workspaces/isaac_ros-dev/install/qcar2_autonomy/share/ament_index/resource_index/packages
+copying resource/qcar2_autonomy -> /workspaces/isaac_ros-dev/install/qcar2_autonomy/share/ament_index/resource_index/packages
+copying package.xml -> /workspaces/isaac_ros-dev/install/qcar2_autonomy/share/qcar2_autonomy
+creating /workspaces/isaac_ros-dev/install/qcar2_autonomy/share/qcar2_autonomy/launch
+copying launch/autonomy_planner_launch.py -> /workspaces/isaac_ros-dev/install/qcar2_autonomy/share/qcar2_autonomy/launch
+running install_egg_info
+Copying ../../../build/qcar2_autonomy/qcar2_autonomy.egg-info to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/qcar2_autonomy-0.0.0-py3.8.egg-info
+running install_scripts
+Installing lane_detector script to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy
+Installing path_follower script to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy
+Installing traffic_system_detector script to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy
+Installing trip_planner script to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy
+Installing yolo_detector script to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy
+writing list of installed files to '/workspaces/isaac_ros-dev/build/qcar2_autonomy/install.log'

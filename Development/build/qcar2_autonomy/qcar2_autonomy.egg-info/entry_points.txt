@@ -1,0 +1,6 @@
+[console_scripts]
+lane_detector = autonomy.lane_detector:main
+path_follower = autonomy.nav_to_pose:main
+traffic_system_detector = autonomy.traffic_system_detector:main
+trip_planner = autonomy.trip_planner:main
+yolo_detector = autonomy.yolo_detector:main
