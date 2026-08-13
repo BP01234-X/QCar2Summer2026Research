@@ -83,7 +83,20 @@ def generate_launch_description():
         package='qcar2_nodes',
         executable='imu_bias_corrector.py',
         name='imu_bias_corrector')
-    
+
+    wheel_odom_node = Node(
+        package='qcar2_nodes',
+        executable='wheel_odom.py',
+        name='wheel_odom')
+
+
+
+        #3 hours to forgot to connect this sh*t.
+    encoder_filter_node = Node(
+        package='qcar2_nodes',
+        executable='encoder_filter.py',
+        name='encoder_filter')
+
     return LaunchDescription([
         qcar2_launch,
         qcar2_nav2_converter,
@@ -94,5 +107,7 @@ def generate_launch_description():
         cartographer_node,
         cartographer_occupancy_grid_node,
         qcar2_to_lidar_tf_node,
-        imu_bias_corrector_node
+        imu_bias_corrector_node,
+        wheel_odom_node,
+        encoder_filter_node
     ])

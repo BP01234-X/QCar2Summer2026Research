@@ -48,14 +48,14 @@ def generate_launch_description():
                 }]
             )
     
-    ekf_fusor = Node(
-            package='qcar2_nodes',
-            executable='ekf_fusor.py',
-            name='ekf_fusor',
-            parameters=[{
-                'tf_pub': LaunchConfiguration('ekf_tf_pub'),
-                }]
-            )
+    # ekf_fusor = Node(
+    #         package='qcar2_nodes',
+    #         executable='ekf_fusor.py',
+    #         name='ekf_fusor',
+    #         parameters=[{
+    #             'tf_pub': LaunchConfiguration('ekf_tf_pub'),
+    #             }]
+    #         )
 
     return LaunchDescription(
         declare_args+[
@@ -63,5 +63,5 @@ def generate_launch_description():
         lidar_node,
         fixed_frame,
         quarc_scan_matcher,
-        ekf_fusor
+        # ekf_fusor
     ])

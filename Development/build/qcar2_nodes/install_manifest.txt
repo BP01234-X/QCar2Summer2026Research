@@ -9,6 +9,7 @@
 /workspaces/isaac_ros-dev/install/qcar2_nodes/lib/qcar2_nodes/ekf_fusor.py
 /workspaces/isaac_ros-dev/install/qcar2_nodes/lib/qcar2_nodes/wheel_odom.py
 /workspaces/isaac_ros-dev/install/qcar2_nodes/lib/qcar2_nodes/imu_bias_corrector.py
+/workspaces/isaac_ros-dev/install/qcar2_nodes/lib/qcar2_nodes/encoder_filter.py
 /workspaces/isaac_ros-dev/install/qcar2_nodes/lib/qcar2_nodes/qcar2_hardware
 /workspaces/isaac_ros-dev/install/qcar2_nodes/lib/qcar2_nodes/rgbd
 /workspaces/isaac_ros-dev/install/qcar2_nodes/lib/qcar2_nodes/lidar

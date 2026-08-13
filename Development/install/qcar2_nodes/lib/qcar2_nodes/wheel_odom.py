@@ -2,41 +2,9 @@
 """
 wheel_odom.py — Odometria dead-reckoning para QCar2 (borrador para revision)
 
-Que hace:
-  Integra el MISMO modelo cinematico de bicicleta que QcarEKF.f() en
-  nav_to_pose.py, pero SIN ningun paso de correccion. Publica el resultado
-  como nav_msgs/Odometry en el topico 'odom', pensado para que Cartografo
-  lo consuma como prior de movimiento (use_odometry: true en el .lua).
 
-Decisiones confirmadas con bp00:
 
-  1) GEAR RATIO (velocidad v) -- RESUELTO:
-     Se usa la de nav_to_pose.py (70.0*30.0). La de ekf_fusor.py (70.0*37.0)
-     se ignora para este nodo por instruccion explicita. La inconsistencia
-     entre ambos archivos sigue existiendo en el repo y sigue anotada en
-     el CHANGELOG, pero para wheel_odom.py ya no es una decision abierta.
-
-  2) FUENTE DE DELTA (angulo de direccion):
-     La plataforma QCar2 no tiene sensor de angulo de direccion -- esto es
-     una restriccion fisica de la plataforma (LIDAR + IMU + encoder de
-     velocidad lineal en el gear de traccion, nada mas), no un defecto de
-     implementacion. La senal mas cercana disponible es el comando final
-     enviado al actuador: /qcar2_motor_speed_cmd
-     (qcar2_interfaces/msg/MotorCommands, campo 'steering_angle').
-     Sigue siendo un valor COMANDADO, no medido -- el error en theta va a
-     acumularse mas rapido que el error en x,y por esta razon estructural,
-     y no hay forma de evitarlo con el sensorial actual.
-
-  NOTA para mas adelante (no se toca ahora): el IMU esta fisicamente en el
-  centro de masa del QCar2, mientras que este modelo de bicicleta usa el
-  eje trasero como punto de referencia (igual que pure pursuit clasico).
-  Existe un brazo de palanca entre ambos puntos. Para yaw rate (lo unico
-  que se usa del IMU aqui) esto no afecta -- la velocidad angular es la
-  misma en cualquier punto de un cuerpo rigido -- pero si mas adelante se
-  usa aceleracion lineal del IMU para algo, ese offset si importa. Queda
-  anotado, no resuelto.
-
-  3) TF: este nodo NO publica la transformada odom->base_link.
+  1) TF: este nodo NO publica la transformada odom->base_link.
      Cartografo ya es dueno de ese TF (provide_odom_frame: true en
      qcar2_2d.lua). Publicarla aqui tambien generaria dos publishers
      compitiendo por el mismo frame -- se descarto a proposito.
@@ -54,12 +22,12 @@ Decisiones confirmadas con bp00:
      no necesita (ni puede, con un mensaje Odometry) declarar esa
      jerarquia -- solo manda datos que Cartografo va a LEER.
 
-  4) Covarianza: queda en cero (= "confianza total") por ahora. Cartografo
+  2) Covarianza: queda en cero (= "confianza total") por ahora. Cartografo
      puede interpretar eso como verdad absoluta. Falta calibrar una vez
      que se vea empiricamente cuanto deriva esto en simulacion frente a
      la correccion de Cartografo por LIDAR.
 
-  5) Nombre de topico 'odom': se uso el nombre por defecto que ya usan
+  3) Nombre de topico 'odom': se uso el nombre por defecto que ya usan
      otros publishers de odometria en este repo (scan_match.py,
      ekf_fusor.py). NO esta confirmado que sea el topico que
      cartographer_node espera por defecto sin remap -- verificar con
@@ -106,7 +74,7 @@ class WheelOdom(Node):
         self.delta = 0.0   # direccion comandada [rad], viene de /qcar2_motor_speed_cmd
 
         self.joint_sub = self.create_subscription(
-            JointState, '/qcar2_joint', self.joint_cb, 1)
+            JointState, '/qcar2_joint_filtered', self.joint_cb, 1)
         self.motor_sub = self.create_subscription(
             MotorCommands, '/qcar2_motor_speed_cmd', self.motor_cb, 1)
 

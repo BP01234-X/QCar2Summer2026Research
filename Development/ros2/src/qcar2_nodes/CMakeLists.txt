@@ -94,6 +94,8 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+
+# Made by BP00
 install(PROGRAMS
   scripts/wheel_odom.py
   DESTINATION lib/${PROJECT_NAME}
@@ -101,6 +103,12 @@ install(PROGRAMS
 
 install(PROGRAMS
   scripts/imu_bias_corrector.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+
+install(PROGRAMS
+  scripts/encoder_filter.py
   DESTINATION lib/${PROJECT_NAME}
 )
 
