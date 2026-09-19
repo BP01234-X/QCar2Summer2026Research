@@ -1,26 +1,86 @@
-For docker with qlabs and setup scenario:
-cd /home/$USER/Documents/ACC_Development/docker/virtual_qcar2
-sudo docker run --rm -it --network host --name virtual-qcar2 quanser/virtual-qcar2 bash
+QCAR2 EKF V1 QUICK START
 
-Once in docker:
-cd /home/qcar2_scripts/python
-python3 Base_Scenarios_Python/Setup_Competition_Map.py && clear
+Use two terminals/containers: the virtual QCar simulator and the ROS 2 development container.
 
-Ros container:
-cd /home/$USER/Documents/ACC_Development/isaac_ros_common
-./scripts/run_dev.sh  /home/$USER/Documents/ACC_Development/Development
+1. Start QLabs and the competition map
 
-colcon buid:
-colcon build && . install/setup.bash && export ROS_DOMAIN_ID=7 && clear
+Host terminal:
 
-To start cartographer:
-clear && . install/setup.bash && export ROS_DOMAIN_ID=7 && clear && ros2 launch qcar2_nodes qcar2_cartographer_virtual_launch.py && clear
+  docker run --rm -it --network host --name virtual-qcar2 quanser/virtual-qcar2 bash
 
-Running autonomy planner:
-colcon build --packages-select qcar2_autonomy && . install/setup.bash && export ROS_DOMAIN_ID=7 && ros2 launch qcar2_autonomy autonomy_planner_launch.py && clear
+Inside virtual-qcar2:
 
-Run nav_to_pose
-colcon build --packages-select qcar2_autonomy && . install/setup.bash && export ROS_DOMAIN_ID=7 && ros2 run qcar2_autonomy path_follower && clear
+  cd /home/qcar2_scripts/python
+  python3 Base_Scenarios_Python/Setup_Competition_Map.py
 
-Run YOLO
-colcon build --packages-select qcar2_autonomy && . install/setup.bash && export ROS_DOMAIN_ID=7 && ros2 run qcar2_autonomy yolo_detector && clear
+2. Start the ROS 2 development container
+
+Host terminal:
+
+  cd /home/bp02-ubuntu/Documents/GitHub/QCar2Summer2026Research/isaac_ros_common
+  ./scripts/run_dev.sh /home/bp02-ubuntu/Documents/GitHub/QCar2Summer2026Research/Development
+
+3. Build and source the nested ROS workspace
+
+Inside the ROS container:
+
+  cd /workspaces/isaac_ros-dev/Development
+  colcon build --base-paths ros2/src
+  source install/setup.bash
+  export ROS_DOMAIN_ID=7
+
+4. Start QCar2 drivers, IMU preprocessing, and LiDAR-only Cartographer
+
+  ros2 launch qcar2_nodes qcar2_cartographer_virtual_launch.py
+
+This launch includes the virtual QCar drivers, IMU startup calibration/filtering and 200 Hz output, encoder filtering, wheel odometry, and Cartographer. Cartographer is configured with use_odometry=false and use_imu_data=false.
+
+5. Start the existing autonomous path follower
+
+In a new ROS terminal, enter the ROS container, then:
+
+  source /workspaces/isaac_ros-dev/Development/install/setup.bash
+  export ROS_DOMAIN_ID=7
+  ros2 run qcar2_autonomy path_follower
+
+The path follower starts with start_path=false.
+
+6. Start the live EKF dashboard
+
+In another ROS terminal:
+
+  source /workspaces/isaac_ros-dev/Development/install/setup.bash
+  export ROS_DOMAIN_ID=7
+  ros2 run qcar2_autonomy nav_diag_live_plot
+
+The dashboard subscribes only to /nav_diag and does not publish commands.
+
+7. Final stationary recording
+
+Keep start_path=false. Wait for IMU calibration to complete, then record for approximately 20-30 seconds:
+
+  ros2 bag record -o v1_final_static \
+    /nav_diag /qcar2_joint /qcar2_imu/bias_corrected_200hz \
+    /cmd_vel_nav /scan /tf /tf_static
+
+8. Final autonomous recording
+
+Start recording with the same topic set:
+
+  ros2 bag record -o v1_final_run \
+    /nav_diag /qcar2_joint /qcar2_imu/bias_corrected_200hz \
+    /cmd_vel_nav /scan /tf /tf_static
+
+Then enable the existing autonomous controller:
+
+  ros2 param set /path_follower start_path "[True]"
+
+Do not add manual steering or change controller parameters.
+
+9. Offline analysis
+
+From the repository root, after copying or accessing the bag directory:
+
+  ros2 run qcar2_autonomy analyze_nav_diag_bag /path/to/v1_final_run
+
+The analyzer writes analysis/<bag_name>/ with eight PNG figures, summary.csv, and summary.txt.

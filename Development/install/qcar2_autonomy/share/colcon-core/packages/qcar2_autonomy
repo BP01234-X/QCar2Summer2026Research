@@ -1,1 +1,1 @@
-qcar2_interfaces
+python3-matplotlib:python3-numpy:qcar2_interfaces:rclpy:rosbag2_py:rosidl_runtime_py:std_msgs

@@ -1,5 +1,7 @@
 [console_scripts]
+analyze_nav_diag_bag = autonomy.analyze_nav_diag_bag:main
 lane_detector = autonomy.lane_detector:main
+nav_diag_live_plot = autonomy.nav_diag_live_plot:main
 path_follower = autonomy.nav_to_pose:main
 traffic_system_detector = autonomy.traffic_system_detector:main
 trip_planner = autonomy.trip_planner:main

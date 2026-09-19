@@ -1,0 +1,21 @@
+running develop
+running egg_info
+writing qcar2_autonomy.egg-info/PKG-INFO
+writing dependency_links to qcar2_autonomy.egg-info/dependency_links.txt
+writing entry points to qcar2_autonomy.egg-info/entry_points.txt
+writing requirements to qcar2_autonomy.egg-info/requires.txt
+writing top-level names to qcar2_autonomy.egg-info/top_level.txt
+reading manifest file 'qcar2_autonomy.egg-info/SOURCES.txt'
+writing manifest file 'qcar2_autonomy.egg-info/SOURCES.txt'
+running build_ext
+Creating /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/qcar2-autonomy.egg-link (link to .)
+Installing analyze_nav_diag_bag script to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy
+Installing lane_detector script to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy
+Installing nav_diag_live_plot script to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy
+Installing path_follower script to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy
+Installing traffic_system_detector script to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy
+Installing trip_planner script to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy
+Installing yolo_detector script to /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy
+
+Installed /workspaces/isaac_ros-dev/build/qcar2_autonomy
+running install_data

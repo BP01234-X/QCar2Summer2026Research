@@ -1,729 +1,501 @@
 #! /usr/bin/env python3
- 
-# Quanser specific packages
-from hal.products.mats import SDCSRoadMap
-from pal.utilities.math import wrap_to_pi
- 
-# Generic python packages
-import time  # Time library
+
+import time
+
 import numpy as np
 import scipy.signal as signal
-from scipy.spatial.transform  import Rotation as R
-from pal.utilities.scope import MultiScope
- 
-# ROS specific packages
-from rclpy.duration import Duration # Handles time for ROS 2
-import rclpy # Python client library for ROS 2
-from geometry_msgs.msg import PoseStamped # Pose with ref frame and timestamp
-from rclpy.node import Node
+from scipy.spatial.transform import Rotation as Rotation
+
+import rclpy
+from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Path
-from tf2_ros import TransformException
-from tf2_ros.buffer import Buffer
-from tf2_ros.transform_listener import TransformListener
-from geometry_msgs.msg import Twist, PoseStamped
-from sensor_msgs.msg import Imu, JointState
 from rcl_interfaces.msg import SetParametersResult
+from rclpy.node import Node
+from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import Bool, Float64MultiArray
- 
- 
-'''
-Description:
- 
-Navigates a robot from an initial pose to a goal pose described by a series of
-given nodes based on Quanser's SDCSRoadMap class
-'''
- 
-# region: Helper classes for state estimation
+from tf2_ros import Buffer, TransformException, TransformListener
+
+from hal.products.mats import SDCSRoadMap
+from pal.utilities.math import wrap_to_pi
+
+
 class QcarEKF:
-    """
-    EKF unificado de 4 estados: [x, y, theta, b]
-        - x, y, theta: pose 2D del auto (frame 'map')
-        - b: bias residual del giroscopio (rad/s)
- 
-    Reemplaza los dos filtros acoplados que vivian aqui antes (QcarEKF de
-    3 estados con heading via modelo de bicicleta + GyroKF de 2 estados
-    separado). Motivo del cambio (documentado en sesion, no una preferencia
-    de estilo): 'delta' (steering) es SIEMPRE comandado, nunca medido -- el
-    QCar2 no tiene encoder de direccion. El giroscopio filtrado, en cambio,
-    es una medicion real de cuanto esta girando el auto. Se usa como
-    control en vez del modelo de bicicleta para el heading.
- 
-    Nota sobre el bias: '/qcar2_imu/bias_corrected_200hz' (lo que llega a
-    self.gyroscope) YA tiene restado un bias estatico calculado una vez al
-    arrancar (imu_bias_corrector.py). El estado 'b' de este EKF rastrea el
-    RESIDUAL que esa calibracion estatica no puede seguir -- deriva de bias
-    en el tiempo. Son dos capas distintas, documentadas por separado.
-    """
- 
-    def __init__(self, x0, P0, Q, R, L=0.257):
-        # Nomenclature:
-        # - x0: initial estimate [x, y, theta, b]
-        # - P0: initial covariance matrix estimate (4x4)
-        # - Q: process noise covariance matrix (4x4)
-        # - R: observation noise covariance matrix (3x3, Cartographer)
-        # - xHat: state estimate
-        # - P: state covariance matrix
-        # - L: wheel base of the QCar
- 
-        self.L = L
- 
-        self.I = np.eye(4)
+    """Six-state local EKF: [x, y, theta, v, omega, b]."""
+
+    def __init__(self, x0, P0, wheelbase, a_max, alpha_max,
+                 sigma_bias_rw, sigma_encoder, sigma_ackermann, sigma_gyro,
+                 R_cart):
+        self.wheelbase = wheelbase
+        self.a_max = a_max
+        self.alpha_max = alpha_max
+        self.sigma_bias_rw = sigma_bias_rw
+        self.R_encoder = np.array([[sigma_encoder ** 2]])
+        self.R_ackermann = np.array([[sigma_ackermann ** 2]])
+        self.R_gyro = np.array([[sigma_gyro ** 2]])
+        self.R_cart = R_cart
+        self.identity = np.eye(6)
         self.xHat = x0
         self.P = P0
-        self.Q = Q
-        self.R = R
- 
-        # Solo x, y, theta son medidos directamente por Cartographer -- el
-        # bias 'b' se corrige indirectamente via la correlacion que P
-        # acumula durante la prediccion (misma logica que ya tenia GyroKF).
-        self.C = np.array([
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 1, 0]
+        self.previous_encoder_observation = None
+        self.previous_gyro_observation = None
+        self.current_Sv = (0.05 * a_max * 0.005) ** 2
+        self.current_Somega = (0.05 * alpha_max * 0.005) ** 2
+        self.current_Qbb = sigma_bias_rw ** 2
+
+    def compute_process_noise(self, dt, encoder_velocity=None, gyro_z=None):
+        if encoder_velocity is not None:
+            if self.previous_encoder_observation is None:
+                dv = 0.0
+            else:
+                dv = encoder_velocity - self.previous_encoder_observation
+            a_eff = np.clip(abs(dv) / dt, 0.05 * self.a_max, self.a_max)
+            self.current_Sv = (a_eff * dt) ** 2
+            self.previous_encoder_observation = encoder_velocity
+
+        if gyro_z is not None:
+            if self.previous_gyro_observation is None:
+                domega = 0.0
+            else:
+                domega = gyro_z - self.previous_gyro_observation
+            alpha_eff = np.clip(
+                abs(domega) / dt, 0.05 * self.alpha_max, self.alpha_max)
+            self.current_Somega = (alpha_eff * dt) ** 2
+            self.previous_gyro_observation = gyro_z
+
+        theta = self.xHat[2, 0]
+        Gv = np.array([
+            [0.5 * dt * np.cos(theta)], [0.5 * dt * np.sin(theta)],
+            [0.0], [1.0], [0.0], [0.0]
         ])
- 
-    # ==============  SECTION A -  Motion Model ====================
-    def f(self, X, u, dt):
-        # Modelo cinematico con heading via giroscopio:
-        # - X = [x, y, theta, b]
-        # - u[0] = v (velocidad medida por encoder, [m/s])
-        # - u[1] = omega (velocidad angular medida por gyro, [rad/s])
-        # - dt: paso de tiempo desde la ultima actualizacion
- 
-        theta = X[2,0]
-        b = X[3,0]
-        return X + dt * np.array([
-            [u[0] * np.cos(theta)],
-            [u[0] * np.sin(theta)],
-            [u[1] - b],
-            [0.0]
+        Gw = np.array([
+            [0.0], [0.0], [0.5 * dt], [0.0], [1.0], [0.0]
         ])
- 
-    # ==============  SECTION B -  Motion Model Jacobian ====================
-    def Jf(self, X, u, dt):
-        # Jacobiano del modelo de arriba respecto al ESTADO (F, no V)
-        theta = X[2,0]
+        Q = (Gv @ Gv.T) * self.current_Sv
+        Q += (Gw @ Gw.T) * self.current_Somega
+        self.current_Qbb = self.sigma_bias_rw ** 2 * dt
+        Q[5, 5] += self.current_Qbb
+        return Q
+
+    def motion_model(self, dt):
+        theta = self.xHat[2, 0]
+        return self.xHat + dt * np.array([
+            [self.xHat[3, 0] * np.cos(theta)],
+            [self.xHat[3, 0] * np.sin(theta)],
+            [self.xHat[4, 0]],
+            [0.0], [0.0], [0.0]
+        ])
+
+    def state_jacobian(self, dt):
+        theta = self.xHat[2, 0]
+        v = self.xHat[3, 0]
         return np.array([
-                [1, 0, -dt*u[0]*np.sin(theta),  0],
-                [0, 1,  dt*u[0]*np.cos(theta),  0],
-                [0, 0,  1,                     -dt],
-                [0, 0,  0,                      1]
-        ])
- 
-    # ==============  SECTION C -  Motion Model Prediction ====================
-    def prediction(self, dt, u):
- 
-        # Update Covariance Estimate
-        F = self.Jf(self.xHat, u, dt)
-        self.P = F@self.P@np.transpose(F) + self.Q
- 
-        # Update State Estimate
-        self.xHat = self.f(self.xHat, u, dt)
-        # Wrap th to be in the range of +/- pi
-        self.xHat[2] = wrap_to_pi(self.xHat[2])
- 
-        return
- 
-    # ==============  SECTION D -  Measurement correction ====================
-    def correction(self, y):
-        # y = [[x_cartographer], [y_cartographer], [theta_cartographer]]
- 
-        H = self.C
-        P_times_HTransposed = self.P @ np.transpose(H)
- 
-        S = H @ P_times_HTransposed + self.R
-        K = P_times_HTransposed @ np.linalg.inv(S)
- 
-        z = (y - H@self.xHat)
-        z[2] = wrap_to_pi(z[2])
- 
-        # K es 4x3 -- aunque solo se mide x,y,theta, esta correccion SI
-        # actualiza 'b' tambien, via la correlacion acumulada en P.
-        self.xHat += K @ z
-        self.xHat[2] = wrap_to_pi(self.xHat[2])
- 
-        self.P = (self.I - K@H) @ self.P
- 
-        return
- 
-#endregion
- 
+            [1, 0, -v * dt * np.sin(theta), dt * np.cos(theta), 0, 0],
+            [0, 1, v * dt * np.cos(theta), dt * np.sin(theta), 0, 0],
+            [0, 0, 1, 0, dt, 0],
+            [0, 0, 0, 1, 0, 0],
+            [0, 0, 0, 0, 1, 0],
+            [0, 0, 0, 0, 0, 1]
+        ], dtype=float)
+
+    def prediction(self, dt, encoder_velocity=None, gyro_z=None):
+        F = self.state_jacobian(dt)
+        self.P = F @ self.P @ F.T + self.compute_process_noise(
+            dt, encoder_velocity, gyro_z)
+        self.xHat = self.motion_model(dt)
+        self.xHat[2, 0] = wrap_to_pi(self.xHat[2, 0])
+
+    def _update(self, measurement, expected, H, R, wrap_index=None):
+        residual = measurement - expected
+        if wrap_index is not None:
+            residual[wrap_index, 0] = wrap_to_pi(residual[wrap_index, 0])
+        PHt = self.P @ H.T
+        S = H @ PHt + R
+        K = np.linalg.solve(S, PHt.T).T
+        self.xHat += K @ residual
+        self.xHat[2, 0] = wrap_to_pi(self.xHat[2, 0])
+        A = self.identity - K @ H
+        self.P = A @ self.P @ A.T + K @ R @ K.T
+        self.P = 0.5 * (self.P + self.P.T)
+        return residual
+
+    def update_encoder(self, velocity):
+        H = np.array([[0, 0, 0, 1, 0, 0]], dtype=float)
+        return self._update(
+            np.array([[velocity]]), np.array([[self.xHat[3, 0]]]), H,
+            self.R_encoder)
+
+    def update_ackermann(self, steering):
+        v = self.xHat[3, 0]
+        H = np.array([[0, 0, 0, -np.tan(steering) / self.wheelbase, 1, 0]])
+        expected = np.array([[
+            self.xHat[4, 0] - v * np.tan(steering) / self.wheelbase
+        ]])
+        return self._update(np.array([[0.0]]), expected, H, self.R_ackermann)
+
+    def update_gyro(self, gyro_z):
+        H = np.array([[0, 0, 0, 0, 1, 1]], dtype=float)
+        expected = np.array([[self.xHat[4, 0] + self.xHat[5, 0]]])
+        return self._update(np.array([[gyro_z]]), expected, H, self.R_gyro)
+
+    def cartographer_innovation(self, measurement):
+        H = np.array([
+            [1, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0]
+        ], dtype=float)
+        residual = measurement - self.xHat[:3]
+        residual[2, 0] = wrap_to_pi(residual[2, 0])
+        PHt = self.P @ H.T
+        S = H @ PHt + self.R_cart
+        d2 = float(residual.T @ np.linalg.solve(S, residual))
+        return residual, d2, S, H
+
+    def accept_cartographer(self, residual, S, H):
+        PHt = self.P @ H.T
+        K = np.linalg.solve(S, PHt.T).T
+        self.xHat += K @ residual
+        self.xHat[2, 0] = wrap_to_pi(self.xHat[2, 0])
+        A = self.identity - K @ H
+        self.P = A @ self.P @ A.T + K @ self.R_cart @ K.T
+        self.P = 0.5 * (self.P + self.P.T)
+
+
 class PathFollower(Node):
- 
     def __init__(self):
-      super().__init__('path_follower')
- 
-      # define new parameters for node to use
-      self.declare_parameter('node_values', [0,8,10])
-      self.waypoints = list(self.get_parameter("node_values").get_parameter_value().integer_array_value)
- 
-      self.declare_parameter('desired_speed', [0.4])
-      self.desired_speed = list(self.get_parameter("desired_speed").get_parameter_value().double_array_value)
- 
- 
-      self.declare_parameter('visualize_pose', [False])
-      self.pose_visualize_flag = list(self.get_parameter("visualize_pose").get_parameter_value().bool_array_value)[0]
- 
-      '''
-      ================= For future reference =================
- 
-      If using the nav_to_pose on virtual qcar these are the values to use if the QCar starts close to node 10
- 
-      Rotation for virtual
-      33.0
-      Translation for virtual
-      1.05,0.9
- 
-      set self.scale to 0.975
- 
-      If using the nav_to_pose on physical qcar but starting close to node 10
-      Rotation
-      44.0
-      Translation
-      1.15,0.55
-      '''
- 
-      self.scale = 1.0
- 
-      self.declare_parameter('rotation_offset', [90.0])
-      self.rotation_offset = list(self.get_parameter("rotation_offset").get_parameter_value().double_array_value)
- 
-      self.declare_parameter('translation_offset', [0.0,0.0])
-      self.translation_offset = list(self.get_parameter("translation_offset").get_parameter_value().double_array_value)
- 
- 
-      self.declare_parameter('start_path', [False])#Change to True to start path following 
-      self.path_execute_flag = list(self.get_parameter("start_path").get_parameter_value().bool_array_value)[0]
- 
-      self.add_on_set_parameters_callback(self.parameter_update_callback)
- 
-      # Declare and acquire `target_frame` parameter
-      self.target_frame = self.declare_parameter(
-        'target_frame', 'base_link').get_parameter_value().string_value
- 
-      self.tf_buffer = Buffer()
-      self.tf_listener = TransformListener(self.tf_buffer, self)
- 
-      # parameters common to all methods
-      self.dt = 1/200
- 
-      # Initial estimates for QCar state [x, y, theta, b] and covariance (P)
-      # b0 = 0 porque imu_bias_corrector.py ya resto un bias estatico
-      # aguas arriba -- este estado solo rastrea lo que sobra (deriva).
-      self.declare_parameter('p_b0', 0.01)  # incertidumbre inicial de b -- ajustar con std de calibracion / N si se conecta ese dato despues
-      p_b0 = self.get_parameter('p_b0').get_parameter_value().double_value
- 
-      x0 = np.zeros((4,1))
-      P0 = np.diagflat([1.0, 1.0, 1.0, p_b0])
- 
-      # R_combined: covarianza de la medicion de Cartographer.
-      # CORREGIDO (sesion de hoy): estaba en 0.0001 -- demasiado chico.
-      # Con una R asi de diminuta, corrigiendo a 200Hz (self.dt = 1/200,
-      # ver tf_timer), el Kalman gain sale ~1 en cada correccion: el EKF
-      # descarta casi por completo su propia prediccion (gyro) y se pega
-      # al TF crudo cada 5ms. Como Cartographer NO genera 200 correcciones
-      # LiDAR independientes por segundo (~10Hz reales, resto extrapolado
-      # -- ver analisis de esta sesion), esto se traducia en theta
-      # "congelado" -- exactamente el sintoma de "no puede girar" con
-      # kp=1, kd=0. Subido a 0.01 -- deja que la prediccion del gyro
-      # (real, 200Hz) tenga peso real entre correcciones. Punto de
-      # partida, no valor final -- falta calibrar con datos reales.
-      R_combined = np.diagflat([0.01, 0.01, 0.01])
- 
-      # q_b: cuanto se le permite moverse a 'b' por paso (rad/s, "bias_dot").
-      # Valor de arranque conservador -- calibrar con datos de deriva larga.
-      self.declare_parameter('q_b', 1e-6)
-      q_b = self.get_parameter('q_b').get_parameter_value().double_value
- 
-      self.qcar2_ekf = QcarEKF(
-        x0=x0,
-        P0=P0,
-        Q=np.diagflat([0.01, 0.01, 0.01, q_b]),
-        R=R_combined)
-      self.pose_ekf = np.zeros((4,1))
- 
- 
-      # timer for both pose and gyro EKF
-      self.yaw = 0
-      # butterworth filter parameters
-      self.cutoff_frequency_filter = 15.0
-      self.a1, self.b1 = self.filter_coefficients(self.cutoff_frequency_filter,self.dt)
- 
-      self.path_control_timer = self.create_timer(self.dt, self.path_planner)
- 
-      # Waypoint and path specific settings
- 
-      self.timer = self.create_timer(self.dt, self.tf_timer)
-      self.translation = [0,0,0]
-      self.rotation =[0,0,0]
-      self.wp  = SDCSRoadMap().generate_path(self.waypoints)*self.scale
-      self.N = len(self.wp[0, :])
-      self.wpi = 0
-      self.wp_prior = []
-      self.current_steering =0
- 
-      self.publisher = self.create_publisher(Twist,'/cmd_vel_nav', 1)
-      self.cyclic = False
-      self.max_steering_angle = 1.0
- 
-      self.joint_state_subscriber = self.create_subscription(JointState, '/qcar2_joint',self.joint_state_callback, 1)
-      self.qcar2_measurred_speed = 0
- 
-      self.object_detection_flag = self.create_subscription(Bool, '/motion_enable',self.object_detector_callback, 1)
-      self.motion_flag = True
-      self.path_complete = False
- 
-      self.imu_subscrition = self.create_subscription(Imu, '/qcar2_imu/bias_corrected_200hz',self.imu_callback, 10)
-      self.gyroscope = [0,0,0]
- 
-      self.path_publisher_topic = self.create_publisher(Path, '/planned_path',1)
- 
-      self.path_status_publisher = self.create_publisher(Bool, '/path_status',1)
- 
-      # Diagnostico interno completo, para grabar en rosbag y analizar
-      # todo el panorama junto (theta EKF, psi, delta, steering, bias, etc.)
-      # Orden de self.nav_diag: ver comentario en path_planner() donde se
-      # arma diag_msg.data -- 13 valores, indices 0-12.
-      self.nav_diag_publisher = self.create_publisher(Float64MultiArray, '/nav_diag', 10)
- 
-      # Multiscope info
-      self.t0 = time.time()
-      self.t_plot = 0
-      self.plot_visualized = False
-      self.scopeTimer = self.create_timer(0.1, self.scopeDataTimer)
- 
- 
+        super().__init__('path_follower')
+
+        self.declare_parameter('node_values', [0, 8, 10])
+        self.waypoints = list(self.get_parameter('node_values').value)
+        self.declare_parameter('desired_speed', [0.4])
+        self.desired_speed = list(self.get_parameter('desired_speed').value)
+        self.declare_parameter('visualize_pose', [False])
+        self.declare_parameter('rotation_offset', [90.0])
+        self.declare_parameter('translation_offset', [0.0, 0.0])
+        self.declare_parameter('start_path', [False])
+        self.declare_parameter('target_frame', 'base_link')
+        self.target_frame = self.get_parameter('target_frame').value
+
+        self.scale = 1.0
+        self.rotation_offset = list(self.get_parameter('rotation_offset').value)
+        self.translation_offset = list(self.get_parameter('translation_offset').value)
+        self.path_execute_flag = list(self.get_parameter('start_path').value)[0]
+        self.add_on_set_parameters_callback(self.parameter_update_callback)
+
+        self.nominal_dt = 1.0 / 200.0
+        self.dt = self.nominal_dt
+        self.max_dt = self.declare_parameter('max_dt', 0.1).value
+        self.last_filter_time = self.get_clock().now()
+
+        parameter_defaults = {
+            'wheelbase': 0.256,
+            'p_x0': 0.01,
+            'p_y0': 0.01,
+            'p_theta0': 0.01,
+            'p_v0': 1.0,
+            'p_omega0': 1.0,
+            'p_b0': 0.01,
+            'a_max': 2.0,
+            'alpha_max': 2.0,
+            'sigma_bias_rw': 1e-4,
+            # Static encoder noise floor measured with the vehicle stationary.
+            'sigma_encoder': 0.015,
+            # Provisional until characterized during a moving run.
+            'sigma_ackermann': 0.2,
+            # Same filtered/debiased 200 Hz gyro signal consumed by the EKF.
+            'sigma_gyro': 0.041,
+            # Static Cartographer pose repeatability while stationary.
+            'sigma_cart_x': 0.010,
+            'sigma_cart_y': 0.006,
+            'sigma_cart_theta': 0.008,
+            'cartographer_mahalanobis_threshold': 11.345,
+            'cartographer_correction_period': 0.1,
+        }
+        for name, value in parameter_defaults.items():
+            self.declare_parameter(name, value)
+
+        x0 = np.zeros((6, 1))
+        P0 = np.diag([
+            self.get_parameter('p_x0').value,
+            self.get_parameter('p_y0').value,
+            self.get_parameter('p_theta0').value,
+            self.get_parameter('p_v0').value,
+            self.get_parameter('p_omega0').value,
+            self.get_parameter('p_b0').value
+        ])
+        R_cart = np.diag([
+            self.get_parameter('sigma_cart_x').value ** 2,
+            self.get_parameter('sigma_cart_y').value ** 2,
+            self.get_parameter('sigma_cart_theta').value ** 2
+        ])
+        self.cartographer_gate_threshold = self.get_parameter(
+            'cartographer_mahalanobis_threshold').value
+        self.cartographer_correction_period = self.get_parameter(
+            'cartographer_correction_period').value
+        self.qcar2_ekf = QcarEKF(
+            x0, P0, self.get_parameter('wheelbase').value,
+            self.get_parameter('a_max').value,
+            self.get_parameter('alpha_max').value,
+            self.get_parameter('sigma_bias_rw').value,
+            self.get_parameter('sigma_encoder').value,
+            self.get_parameter('sigma_ackermann').value,
+            self.get_parameter('sigma_gyro').value,
+            R_cart)
+
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.translation = None
+        self.yaw = 0.0
+        self.last_cartographer_stamp_ns = -1
+        self.last_cartographer_correction_time = None
+        self.cartographer_innovation = np.zeros(3)
+        self.cartographer_mahalanobis_d2 = np.nan
+        self.cartographer_update_accepted = False
+        self.cartographer_update_rejected = False
+        self.encoder_residual = np.nan
+        self.ackermann_residual = np.nan
+        self.gyro_residual = np.nan
+
+        self.gyroscope = np.zeros(3)
+        self.imu_received = False
+        self.imu_ready = False
+        self.imu_new = False
+        self.qcar2_measurred_speed = 0.0
+        self.encoder_received = False
+        self.encoder_new = False
+        self.current_steering = 0.0
+        self.applied_steering = 0.0
+        self.applied_steering_valid = False
+        self.applied_command_active = False
+        self.motion_flag = True
+        self.path_complete = False
+
+        self.publisher = self.create_publisher(Twist, '/cmd_vel_nav', 1)
+        self.path_publisher_topic = self.create_publisher(Path, '/planned_path', 1)
+        self.path_status_publisher = self.create_publisher(Bool, '/path_status', 1)
+        self.nav_diag_publisher = self.create_publisher(Float64MultiArray, '/nav_diag', 10)
+        self.create_subscription(JointState, '/qcar2_joint', self.joint_state_callback, 1)
+        self.create_subscription(Imu, '/qcar2_imu/bias_corrected_200hz', self.imu_callback, 10)
+        self.create_subscription(Bool, '/motion_enable', self.object_detector_callback, 1)
+
+        self.cutoff_frequency_filter = 15.0
+        self.filter_a, self.filter_b = self.filter_coefficients(
+            self.cutoff_frequency_filter, self.nominal_dt)
+        self.path_control_timer = self.create_timer(self.nominal_dt, self.path_planner)
+        self.tf_timer_handle = self.create_timer(self.nominal_dt, self.tf_timer)
+
+        self.wp = SDCSRoadMap().generate_path(self.waypoints) * self.scale
+        self.N = len(self.wp[0, :])
+        self.wpi = 0
+        self.wp_prior = []
+        self.t0 = time.time()
+        self.t_plot = 0.0
+
     def parameter_update_callback(self, params):
         for param in params:
- 
-          if param.name == 'node_values' and param.type_== param.Type.INTEGER_ARRAY:
-              # Navigation specific variables
-              self.waypoints = list(param.value)
-              # print(self.waypoints)
-              self.wp  = SDCSRoadMap().generate_path(self.waypoints)*0.975
-              self.N = len(self.wp[0, :])
-              self.wpi = 0
-              self.previous_steering_value = 0
-              self.path_complete = False
-              self.get_logger().info('nodes updated!')
-              print(self.waypoints)
- 
-          elif param.name == 'desired_speed' and param.type_== param.Type.DOUBLE_ARRAY:
-              self.desired_speed = list(param.value)
-              self.get_logger().info('new desired speed...')
-              print(self.desired_speed)
- 
-          elif param.name == 'rotation_offset' and param.type_== param.Type.DOUBLE_ARRAY:
-              self.rotation_offset = list(param.value)
- 
-          elif param.name == 'translation_offset' and param.type_== param.Type.DOUBLE_ARRAY:
-              self.translation_offset = list(param.value)
-          elif param.name == 'start_path' and param.type_== param.Type.BOOL_ARRAY:
-              self.path_execute_flag = list(param.value)[0]
-              self.get_logger().info('path status changed!')
- 
-          elif param.name == 'visualize_pose' and param.type_== param.Type.BOOL_ARRAY:
-              self.pose_visualize_flag = list(param.value)[0]
-              if self.pose_visualize_flag and not self.plot_visualized:
-                self.get_logger().info('Pose performance to be displayed.. Note: visualizing pose will impact driving performance...')
- 
-                tf = 200
- 
-                self.steeringScope = MultiScope(
-                      rows=4,
-                      cols=1,
-                      title='Vehicle Steering Control',
-                      fps=10
-                  )
- 
-                self.steeringScope.addAxis(
-                      row=0,
-                      col=0,
-                      timeWindow=tf,
-                      yLabel='x Position [m]',
-                      yLim=(-2.5, 2.5)
-                  )
-                self.steeringScope.axes[0].attachSignal(name='x_meas')
-                self.steeringScope.axes[0].attachSignal(name='x_ekf')
- 
-                self.steeringScope.addAxis(
-                      row=1,
-                      col=0,
-                      timeWindow=tf,
-                      yLabel='y Position [m]',
-                      yLim=(-1, 6)
-                  )
-                self.steeringScope.axes[1].attachSignal(name='y_meas')
-                self.steeringScope.axes[1].attachSignal(name='y_ekf')
- 
-                self.steeringScope.addAxis(
-                      row=2,
-                      col=0,
-                      timeWindow=tf,
-                      yLabel='steering cmd [rad]',
-                      yLim=(-0.6,0.6)
-                  )
-                self.steeringScope.axes[2].attachSignal(name='delta')
- 
-                self.steeringScope.addAxis(
-                      row=3,
-                      col=0,
-                      timeWindow=tf,
-                      yLabel='heading',
-                      yLim=(-np.pi,np.pi)
-                  )
-                self.steeringScope.axes[3].attachSignal(name='theta_meas')
-                self.steeringScope.axes[3].attachSignal(name='theta_EKF_sf')
- 
-                self.plot_visualized = True
-              
-              elif self.pose_visualize_flag and self.plot_visualized:
-                self.get_logger().info('visualization running...')
- 
-              elif not self.pose_visualize_flag and self.plot_visualized:
-                self.plot_visualized = False
- 
-          return SetParametersResult(successful=True)
-  
-    def filter_coefficients(self, freq,dt):
-      nyq_freq = 0.5*(1/dt)
-      norm_cut = freq/nyq_freq
- 
- 
-      b, a = signal.butter(2,norm_cut)
-      self.hist = {
-          'gyro': {'in': [0.0]*3, 'out': [0.0]*3},
-          }
- 
-      return a,b
-   
-    def apply_filter(self, key, new_input, a,b):
-        h = self.hist[key]
-        h['in'] = [new_input] + h['in'][:2]
-        y = (
-            b[0]*h['in'][0] +
-            b[1]*h['in'][1] +
-            b[2]*h['in'][2] -
-            a[1]*h['out'][0] -
-            a[2]*h['out'][1]
-        )
-        h['out'] = [y] + h['out'][:2]
-        return y
- 
+            if param.name == 'node_values':
+                self.waypoints = list(param.value)
+                self.wp = SDCSRoadMap().generate_path(self.waypoints) * self.scale
+                self.N = len(self.wp[0, :])
+                self.wpi = 0
+                self.path_complete = False
+            elif param.name == 'desired_speed':
+                self.desired_speed = list(param.value)
+            elif param.name == 'rotation_offset':
+                self.rotation_offset = list(param.value)
+            elif param.name == 'translation_offset':
+                self.translation_offset = list(param.value)
+            elif param.name == 'start_path':
+                self.path_execute_flag = list(param.value)[0]
+        return SetParametersResult(successful=True)
+
+    def filter_coefficients(self, frequency, dt):
+        normalized = frequency / (0.5 * (1.0 / dt))
+        b, a = signal.butter(2, normalized)
+        self.filter_history = {'gyro': {'input': [0.0] * 3, 'output': [0.0] * 3}}
+        return a, b
+
+    def apply_filter(self, key, value, a, b):
+        history = self.filter_history[key]
+        history['input'] = [value] + history['input'][:2]
+        output = (b[0] * history['input'][0] + b[1] * history['input'][1]
+                  + b[2] * history['input'][2] - a[1] * history['output'][0]
+                  - a[2] * history['output'][1])
+        history['output'] = [output] + history['output'][:2]
+        return output
+
     def object_detector_callback(self, msg):
-      self.motion_flag = msg.data
-      # self.get_logger().info(f"motion Falg received was:{self.motion_flag}")
- 
+        self.motion_flag = msg.data
+
     def joint_state_callback(self, msg):
-      self.qcar2_measurred_speed = (msg.velocity[0]/(720.0*4.0))*((13.0*19.0)/(70.0*30.0))*(2.0*np.pi)*0.033
- 
-    def imu_callback(self,msg):
-       self.gyroscope = [msg.angular_velocity.x,msg.angular_velocity.y,msg.angular_velocity.z]
- 
+        if msg.velocity:
+            self.qcar2_measurred_speed = (msg.velocity[0] / (720.0 * 4.0)) * ((13.0 * 19.0) / (70.0 * 30.0)) * (2.0 * np.pi) * 0.033
+            self.encoder_received = True
+            self.encoder_new = True
+
+    def imu_callback(self, msg):
+        self.gyroscope = np.array([
+            msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z
+        ])
+        self.imu_received = True
+        self.imu_ready = True
+        self.imu_new = True
+
     def path_publisher(self):
         path_msg = Path()
         path_msg.header.stamp = self.get_clock().now().to_msg()
-        path_msg.header.frame_id = "map"
-        # path_msg.header.frame_id = "map_rotated"
- 
-        for i in range(self.wpi):
-        # for i in range(self.N):
-          if i >= self.N:
-             i = self.N-1
-          pose = PoseStamped()
-          wp_1_mod = [0,0]
- 
-          angle_offset= self.rotation_offset[0]
-          R_QLabs_ROS = np.array([[np.cos(-angle_offset*np.pi/180), -np.sin(-angle_offset*np.pi/180)],
-                                  [np.sin(-angle_offset*np.pi/180),np.cos(-angle_offset*np.pi/180)]])
-          t = np.array([self.translation_offset[0],self.translation_offset[1]])
-          wp_1_mod = ([self.wp[0,i],self.wp[1,i]]+t)@R_QLabs_ROS
-          pose.header.stamp = self.get_clock().now().to_msg()
-          # pose.header.frame_id = "map_rotated"
-          pose.header.frame_id = "map"
-          pose.pose.position.x =wp_1_mod[0]
-          pose.pose.position.y =wp_1_mod[1]
- 
-          path_msg.poses.append(pose)
- 
+        path_msg.header.frame_id = 'map'
+        rotation = np.array([
+            [np.cos(-self.rotation_offset[0] * np.pi / 180), -np.sin(-self.rotation_offset[0] * np.pi / 180)],
+            [np.sin(-self.rotation_offset[0] * np.pi / 180), np.cos(-self.rotation_offset[0] * np.pi / 180)]
+        ])
+        offset = np.array(self.translation_offset)
+        for index in range(min(self.wpi, self.N)):
+            point = ([self.wp[0, index], self.wp[1, index]] + offset) @ rotation
+            pose = PoseStamped()
+            pose.header = path_msg.header
+            pose.pose.position.x = point[0]
+            pose.pose.position.y = point[1]
+            path_msg.poses.append(pose)
         self.path_publisher_topic.publish(path_msg)
- 
+
     def path_planner(self):
- 
-        max_speed = 1.5
-        enable = 1
-        speed_command = self.desired_speed[0]
-        # self.max_rate = np.clip(0.01*(speed_command)/max_speed,0.001,0.1)
-        skip_index = 0
- 
-        self.t_plot = time.time()-self.t0
- 
-        # update ekf_filter
+        if not (self.path_execute_flag and self.motion_flag and not self.path_complete):
+            self.applied_steering = 0.0
+            self.applied_steering_valid = False
+            self.applied_command_active = False
         self.ekf_filter_timer()
- 
-        # publish latest path value based on current waypoint every 2 seconds
-        if round(self.t_plot) % 2 == 0:
-          self.path_publisher()
- 
-        # --- DIAGNOSTICO INCONDICIONAL (fuera del try, quitar despues) ---
-        # Este SI se imprime siempre, sin importar path_complete/exceptions.
-        # Si el otro [DIAG] nunca aparece, esto nos dice por que: si N es
-        # chico/raro, si path_complete ya esta en True desde el inicio, o
-        # si el flag de arranque nunca se activo.
-        if not hasattr(self, '_diag2_last_t') or (self.t_plot - self._diag2_last_t) >= 1.0:
-            self._diag2_last_t = self.t_plot
-            self.get_logger().info(
-                f'[DIAG2] path_complete={self.path_complete} | '
-                f'path_execute_flag={self.path_execute_flag} | '
-                f'motion_flag={self.motion_flag} | '
-                f'wpi={self.wpi} | N={self.N} | '
-                f'wp_shape={np.shape(self.wp)}'
-            )
-        # --- FIN DIAGNOSTICO INCONDICIONAL ---
- 
-        try:
-          if not self.path_complete :
- 
-            # extract waypoints of interest
-            wp_1 = np.array(self.wp[:, self.wpi])
-            wp_2 = np.array(self.wp[:, self.wpi+1])
- 
-            wp_1_mod = [0,0]
- 
-            angle_offset= self.rotation_offset[0]
- 
-            R_QLabs_ROS = np.array([[np.cos(-angle_offset*np.pi/180), -np.sin(-angle_offset*np.pi/180)],
-                                    [np.sin(-angle_offset*np.pi/180),np.cos(-angle_offset*np.pi/180)]])
-            t = np.array([self.translation_offset[0],self.translation_offset[1]])
-            wp_1_mod = (wp_1+t)@R_QLabs_ROS
- 
-            L= 0.256
- 
-            # Pose/heading para la geometria de pure pursuit: SIEMPRE del
-            # EKF (xHat), nunca del TF crudo de Cartographer.
-            #
-            # CORREGIDO (sesion de hoy): antes habia un try/except que
-            # sobreescribia esto con self.translation/self.yaw (TF crudo)
-            # cada vez que esos atributos existian -- lo cual es casi
-            # siempre, una vez que llega el primer TF. En la practica,
-            # pure pursuit nunca estaba usando el EKF para su geometria,
-            # pese a que el comentario original decia lo contrario.
-            #
-            # Por que importa: self.yaw se lee directo de tf_timer() sin
-            # ningun suavizado -- y ya confirmamos (analisis con G) que
-            # Cartographer publica pose a 200Hz pero solo genera ~10
-            # correcciones LiDAR reales por segundo; el resto son poses
-            # extrapoladas, potencialmente repetidas/rezagadas entre si.
-            # Usar ese valor crudo directo en la formula de rotacion
-            # (R = f(th)) significa que cualquier atraso de 'th' se
-            # traduce directo en un angulo de direccion mal calculado --
-            # eso es lo que se vio como "resistencia al giro".
-            #
-            # El EKF predice theta con el gyro (200Hz, real) entre
-            # correcciones de Cartographer, y solo se ancla al TF cuando
-            # corrige -- exactamente el comportamiento que se queria.
-            th = self.qcar2_ekf.xHat[2,0]
-            p = [self.qcar2_ekf.xHat[0,0],self.qcar2_ekf.xHat[1,0]]
- 
-            v = [wp_1_mod[0]-p[0],wp_1_mod[1]-p[1]]
-            R = np.array([[np.cos(th), -np.sin(th)],[np.sin(th),np.cos(th)]])
-            v_car = v@R
- 
-            WaypointDist = np.linalg.norm(v_car)
-            psi = np.arctan2(v_car[1],v_car[0])
- 
- 
-            # pure pursuit algorithm
-            delta = np.arctan2(2*L*np.sin(psi),WaypointDist)
-            dist = np.linalg.norm([p[0]-wp_1_mod[0],p[1]-wp_1_mod[1]])
- 
-            # --- Publisher de diagnostico interno (para grabar en rosbag) ---
-            # Antes esto solo se imprimia 1 vez/seg en consola -- no era
-            # grabable ni cruzable con el resto de los topicos. Ahora se
-            # publica cada ciclo (200Hz) como Float64MultiArray, para poder
-            # correlacionar con /tf, /qcar2_imu, /qcar2_joint_filtered, etc.
-            # en un analisis posterior, en vez de adivinar una variable a
-            # la vez.
-            self._diag_psi = psi
-            self._diag_delta = delta
-            self._diag_dist = dist
-            self._diag_wp1_mod = wp_1_mod
-            # --- fin captura, steering se agrega mas abajo antes de publicar ---
- 
-            lookahead_dist = speed_command*0.5
-            skip_index = int(speed_command*(speed_command/max_speed))
-            lookahead_dist = np.clip(lookahead_dist,2*L,0.75)
-            skip_index = np.clip(skip_index,5,60)
- 
- 
- 
-            if dist<lookahead_dist:
-              if self.wpi < self.N-2:
-                self.wpi += skip_index
- 
-            self.wpi = np.clip(self.wpi,0,self.N-5)
- 
-            if self.wpi >= self.N-5:
-              if dist <0.4:
+        speed_command = self.desired_speed[0]
+        if round(time.time() - self.t0) % 2 == 0:
+            self.path_publisher()
+
+        if not self.path_complete:
+            offset_rotation = np.array([
+                [np.cos(-self.rotation_offset[0] * np.pi / 180), -np.sin(-self.rotation_offset[0] * np.pi / 180)],
+                [np.sin(-self.rotation_offset[0] * np.pi / 180), np.cos(-self.rotation_offset[0] * np.pi / 180)]
+            ])
+            waypoint = (self.wp[:2, self.wpi] + np.array(self.translation_offset)) @ offset_rotation
+            theta = self.qcar2_ekf.xHat[2, 0]
+            position = self.qcar2_ekf.xHat[:2, 0]
+            vector = waypoint - position
+            body_vector = vector @ np.array([[np.cos(theta), -np.sin(theta)], [np.sin(theta), np.cos(theta)]])
+            distance = np.linalg.norm(body_vector)
+            psi = np.arctan2(body_vector[1], body_vector[0])
+            wheelbase = self.qcar2_ekf.wheelbase
+            steering = np.arctan2(2 * wheelbase * np.sin(psi), distance)
+            if np.linalg.norm(vector) < np.clip(speed_command * 0.5, 2 * wheelbase, 0.75):
+                self.wpi = min(self.wpi + max(5, int(speed_command ** 2 / 1.5)), self.N - 5)
+            if self.wpi >= self.N - 5 and np.linalg.norm(vector) < 0.4:
                 speed_command = 0.0
-                steering = 0.0
-                self.wp_prior = self.wp
                 self.path_complete = True
- 
-            if self.wpi > self.N-100 :
-               speed_command = 0.2
- 
-            Kp_steering = 1
-            kd_steering = 0.09
- 
-            gyro_filtered = self.apply_filter('gyro', self.gyroscope[2],self.a1, self.b1)
- 
-            steering = np.clip(
-                          Kp_steering*delta-gyro_filtered*kd_steering,
-                          -self.max_steering_angle,
-                          self.max_steering_angle)
- 
-            self.current_steering = steering
- 
-            # Publica el diagnostico completo de este ciclo -- todo lo que
-            # antes vivia solo en variables locales o en el print de 1Hz.
-            diag_msg = Float64MultiArray()
-            diag_msg.data = [
-                float(th),                          # 0: theta EKF (rad)
-                float(p[0]), float(p[1]),           # 1,2: posicion EKF (x,y)
-                float(getattr(self, 'yaw', float('nan'))),  # 3: yaw crudo de Cartografo
-                float(self._diag_psi),              # 4: psi (angulo al waypoint, rad)
-                float(self._diag_delta),            # 5: delta geometrico puro (rad)
-                float(steering),                    # 6: steering final (post Kp/Kd/clip)
-                float(gyro_filtered),               # 7: gyro filtrado (Butterworth interno 15Hz)
-                float(self._diag_dist),             # 8: distancia al waypoint (m)
-                float(self.wpi),                    # 9: indice de waypoint actual
-                float(self.qcar2_ekf.xHat[3,0]),    # 10: bias estimado del EKF
-                float(self._diag_wp1_mod[0]), float(self._diag_wp1_mod[1]),  # 11,12: waypoint objetivo (x,y)
-            ]
-            self.nav_diag_publisher.publish(diag_msg)
- 
- 
- 
-        except KeyboardInterrupt:
-          speed_command = 0.0
-          steering = 0.0
-        if self.path_execute_flag== True:
-          if self.motion_flag == True:
-              enable = 1.0
-        if self.path_execute_flag == False or self.motion_flag == False or self.path_complete:
-            enable = 0.0
- 
- 
-        # publishing commands
+            gyro_for_control = self.gyroscope[2] if self.imu_received else 0.0
+            gyro_filtered = self.apply_filter('gyro', gyro_for_control, self.filter_a, self.filter_b)
+            self.current_steering = np.clip(steering - 0.09 * gyro_filtered, -1.0, 1.0)
+            self.publish_diagnostics(theta, position, psi, steering, gyro_filtered, distance, waypoint)
+
+        enable = float(self.path_execute_flag and self.motion_flag and not self.path_complete)
         self.nav_command(enable, speed_command)
         self.path_status()
- 
-    def nav_command(self,enable, speed_command):
-      QCarCommands = Twist()
-      QCarCommands.linear.x = enable*np.clip(speed_command*np.power(np.cos(self.current_steering),1),0.05,0.7)
-      QCarCommands.angular.z = enable*self.current_steering
-      self.publisher.publish(QCarCommands)
- 
+
+    def publish_diagnostics(self, theta, position, psi, steering, gyro_filtered, distance, waypoint):
+        msg = Float64MultiArray()
+        msg.data = [
+            float(self.qcar2_ekf.xHat[0, 0]), float(self.qcar2_ekf.xHat[1, 0]),
+            float(self.qcar2_ekf.xHat[2, 0]), float(self.qcar2_ekf.xHat[3, 0]),
+            float(self.qcar2_ekf.xHat[4, 0]), float(self.qcar2_ekf.xHat[5, 0]),
+            float(self.encoder_residual), float(self.ackermann_residual),
+            float(self.gyro_residual),
+            float(self.cartographer_innovation[0]), float(self.cartographer_innovation[1]),
+            float(self.cartographer_innovation[2]), float(self.cartographer_mahalanobis_d2),
+            float(self.cartographer_update_accepted), float(self.cartographer_update_rejected),
+            float(self.qcar2_ekf.P[0, 0]), float(self.qcar2_ekf.P[1, 1]),
+            float(self.qcar2_ekf.P[2, 2]), float(self.qcar2_ekf.P[3, 3]),
+            float(self.qcar2_ekf.P[4, 4]), float(self.qcar2_ekf.P[5, 5]),
+            float(self.qcar2_ekf.current_Sv), float(self.qcar2_ekf.current_Somega),
+            float(self.qcar2_ekf.current_Qbb),
+            float(self.qcar2_measurred_speed), float(self.gyroscope[2]),
+            float(self.applied_steering), float(self.dt),
+            float(self.yaw), float(psi), float(steering), float(gyro_filtered),
+            float(distance), float(self.wpi), float(waypoint[0]), float(waypoint[1]),
+            float(self.cartographer_gate_threshold), float(self.last_cartographer_stamp_ns) * 1e-9
+        ]
+        self.nav_diag_publisher.publish(msg)
+
+    def nav_command(self, enable, speed_command):
+        command = Twist()
+        self.applied_command_active = bool(enable)
+        self.applied_steering = self.current_steering if self.applied_command_active else 0.0
+        self.applied_steering_valid = self.applied_command_active
+        command.linear.x = enable * np.clip(speed_command * np.cos(self.applied_steering), 0.05, 0.7)
+        command.angular.z = enable * self.applied_steering
+        self.publisher.publish(command)
+
     def path_status(self):
-      msg = Bool()
-      msg.data = self.path_complete
-      self.path_status_publisher.publish(msg)
- 
+        msg = Bool()
+        msg.data = self.path_complete
+        self.path_status_publisher.publish(msg)
+
     def tf_timer(self):
-      from_frame_rel= "map"
-      to_frame_rel = self.target_frame
- 
-      try:
-        t = self.tf_buffer.lookup_transform(
-        from_frame_rel,
-        to_frame_rel,
-        rclpy.time.Time())
-        self.translation = t.transform.translation
-        rotation = [t.transform.rotation.x,
-                    t.transform.rotation.y,
-                    t.transform.rotation.z,
-                    t.transform.rotation.w]
-        roll, pitch,self.yaw = R.from_quat(rotation).as_euler('xyz')
- 
-        # Correccion directa desde Cartographer (map -> target_frame).
-        # Antes esto pasaba primero por un GyroKF separado para el heading
-        # -- ahora theta se corrige junto con x,y en el mismo EKF de 4
-        # estados, y esa misma correccion tambien ajusta el bias 'b' via
-        # la correlacion que P acumula en la prediccion.
-        y = np.array([
-                  [self.translation.x],
-                  [self.translation.y],
-                  [self.yaw]
-              ])
- 
-        self.qcar2_ekf.correction(y)
-      except TransformException as ex:
-          self.get_logger().info(f'Could not transform {to_frame_rel} to {from_frame_rel}: {ex}')
-          return
- 
+        try:
+            transform = self.tf_buffer.lookup_transform('map', self.target_frame, rclpy.time.Time())
+            stamp_ns = transform.header.stamp.sec * 1000000000 + transform.header.stamp.nanosec
+            if stamp_ns <= 0 or stamp_ns == self.last_cartographer_stamp_ns:
+                return
+            now = self.get_clock().now()
+            if self.last_cartographer_correction_time is not None:
+                elapsed = (now - self.last_cartographer_correction_time).nanoseconds * 1e-9
+                if elapsed < self.cartographer_correction_period:
+                    return
+            self.translation = transform.transform.translation
+            quaternion = transform.transform.rotation
+            self.yaw = Rotation.from_quat([quaternion.x, quaternion.y, quaternion.z, quaternion.w]).as_euler('xyz')[2]
+            measurement = np.array([[self.translation.x], [self.translation.y], [self.yaw]])
+            residual, d2, S, H = self.qcar2_ekf.cartographer_innovation(measurement)
+            self.cartographer_innovation = residual[:, 0]
+            self.cartographer_mahalanobis_d2 = d2
+            self.cartographer_update_accepted = d2 <= self.cartographer_gate_threshold
+            self.cartographer_update_rejected = not self.cartographer_update_accepted
+            if self.cartographer_update_accepted:
+                self.qcar2_ekf.accept_cartographer(residual, S, H)
+            self.last_cartographer_stamp_ns = stamp_ns
+            self.last_cartographer_correction_time = now
+        except TransformException:
+            return
+
     def ekf_filter_timer(self):
-      # Prediccion con velocidad medida (encoder) + velocidad angular
-      # medida (gyro, ya filtrado y bias-corregido por
-      # imu_bias_corrector.py aguas arriba) -- 'delta' (steering) ya NO
-      # se usa aqui para el heading, porque es comandado, no medido.
-      speed = self.qcar2_measurred_speed
- 
-      try:
-         omega = self.gyroscope[2]
-      except AttributeError:
-         omega = 0.0
- 
-      self.qcar2_ekf.prediction(self.dt, [speed, omega])
- 
-    def scopeDataTimer(self):
-      if self.pose_visualize_flag:
-        p = [self.qcar2_ekf.xHat[0,0],self.qcar2_ekf.xHat[1,0],self.qcar2_ekf.xHat[2,0]]
- 
-        if self.t_plot >200:
-          self.t0 = time.time()
-          self.steeringScope.axes[0].clean()
-          self.steeringScope.axes[1].clean()
-          self.steeringScope.axes[2].clean()
-          self.steeringScope.axes[3].clean()
-          MultiScope.refreshAll()
- 
-        try:
-          x_ref = self.translation.x
-          y_ref = self.translation.y
-        except AttributeError:
-          x_ref = 0
-          y_ref = 0
-        self.steeringScope.axes[0].sample(self.t_plot, [x_ref, p[0] ])
-        self.steeringScope.axes[1].sample(self.t_plot, [y_ref, p[1]])
-        self.steeringScope.axes[2].sample(self.t_plot, [self.current_steering])
-        self.steeringScope.axes[3].sample(self.t_plot, [self.yaw,self.qcar2_ekf.xHat[2,0]])
- 
-        MultiScope.refreshAll()     
-      
-      else:
-        try:
-            self.steeringScope.graphicsLayoutWidget.close()
-            self.get_logger().info('previous scope closed...')
- 
-        except AttributeError:
-          # self.get_logger().info('no visualization running...')
-          pass
- 
- 
- 
-def main():
- 
-  # Start the ROS 2 Python Client Library
-  rclpy.init()
- 
-  node = PathFollower()
-  try:
-      rclpy.spin(node)
-  except KeyboardInterrupt:
-      pass
- 
-  rclpy.shutdown()
- 
+        now = self.get_clock().now()
+        elapsed = (now - self.last_filter_time).nanoseconds * 1e-9
+        self.last_filter_time = now
+        if elapsed <= 0.0:
+            return
+        self.dt = min(elapsed, self.max_dt)
+        self.qcar2_ekf.prediction(
+            self.dt,
+            self.qcar2_measurred_speed if self.encoder_received else None,
+            self.gyroscope[2] if self.imu_ready else None)
+        if self.encoder_new:
+            self.encoder_residual = float(
+                self.qcar2_ekf.update_encoder(self.qcar2_measurred_speed)[0, 0])
+            self.encoder_new = False
+        if self.applied_steering_valid and self.applied_command_active:
+            self.ackermann_residual = float(
+                self.qcar2_ekf.update_ackermann(self.applied_steering)[0, 0])
+        if self.imu_ready and self.imu_new:
+            self.gyro_residual = float(
+                self.qcar2_ekf.update_gyro(self.gyroscope[2])[0, 0])
+            self.imu_new = False
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = PathFollower()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
 if __name__ == '__main__':
-  main()
+    main()

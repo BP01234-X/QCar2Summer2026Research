@@ -9,6 +9,8 @@ setup.py
 ../../../build/qcar2_autonomy/qcar2_autonomy.egg-info/top_level.txt
 ../../../build/qcar2_autonomy/qcar2_autonomy.egg-info/zip-safe
 autonomy/__init__.py
+autonomy/analyze_nav_diag_bag.py
+autonomy/nav_diag_live_plot.py
 autonomy/nav_to_pose.py
 autonomy/traffic_system_detector.py
 autonomy/trip_planner.py

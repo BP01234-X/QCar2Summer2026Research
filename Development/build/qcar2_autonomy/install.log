@@ -1,11 +1,15 @@
+/workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/nav_diag_live_plot.py
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/__init__.py
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/nav_to_pose.py
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/yolo_detector.py
+/workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/analyze_nav_diag_bag.py
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/trip_planner.py
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/traffic_system_detector.py
+/workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/__pycache__/nav_diag_live_plot.cpython-38.pyc
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/__pycache__/__init__.cpython-38.pyc
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/__pycache__/nav_to_pose.cpython-38.pyc
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/__pycache__/yolo_detector.cpython-38.pyc
+/workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/__pycache__/analyze_nav_diag_bag.cpython-38.pyc
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/__pycache__/trip_planner.cpython-38.pyc
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/autonomy/__pycache__/traffic_system_detector.cpython-38.pyc
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/share/ament_index/resource_index/packages/qcar2_autonomy
@@ -18,7 +22,9 @@
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/qcar2_autonomy-0.0.0-py3.8.egg-info/PKG-INFO
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/qcar2_autonomy-0.0.0-py3.8.egg-info/entry_points.txt
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/python3.8/site-packages/qcar2_autonomy-0.0.0-py3.8.egg-info/top_level.txt
+/workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy/analyze_nav_diag_bag
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy/lane_detector
+/workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy/nav_diag_live_plot
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy/path_follower
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy/traffic_system_detector
 /workspaces/isaac_ros-dev/install/qcar2_autonomy/lib/qcar2_autonomy/trip_planner
